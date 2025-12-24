@@ -2308,7 +2308,7 @@ absl::StatusOr<HloSchedule> CpuCompiler::CreateHloSchedule(
                        ? std::unique_ptr<ModuleSchedulerAlgorithm>(
                              std::make_unique<BFScheduler>(
                                  &alias_info, BufferSizeBytesFunction()))
-                       : std::make_unique<DFSMemoryScheduler>(
+                       : std::make_unique<DefaultMemoryScheduler>(
                              &alias_info, BufferSizeBytesFunction());
 
   // Select an order for emitting the HLO instructions for each
