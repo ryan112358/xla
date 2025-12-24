@@ -2302,19 +2302,38 @@ absl::StatusOr<HloSchedule> CpuCompiler::CreateHloSchedule(
     const HloModule& hlo_module) const {
   AliasInfo alias_info;
   // Select a memory scheduler optimized for concurrency vs minimal memory.
-  auto scheduler = hlo_module.config()
-                           .debug_options()
-                           .xla_cpu_enable_concurrency_optimized_scheduler()
-                       ? std::unique_ptr<ModuleSchedulerAlgorithm>(
-                             std::make_unique<BFScheduler>(
-                                 &alias_info, BufferSizeBytesFunction()))
-                       : std::make_unique<DefaultMemoryScheduler>(
-                             &alias_info, BufferSizeBytesFunction());
+  if (hlo_module.config()
+          .debug_options()
+          .xla_cpu_enable_concurrency_optimized_scheduler()) {
+    return ScheduleModule(&hlo_module,
+                          BFScheduler(&alias_info, BufferSizeBytesFunction()));
+  }
 
-  // Select an order for emitting the HLO instructions for each
-  // computation. Using this sequence enables tighter buffer liveness analysis
-  // and reduced memory usage (as compared to using `DependencyHloOrdering`).
-  return ScheduleModule(&hlo_module, *scheduler);
+  // We run both DFS and List schedulers and pick the one that minimizes peak
+  // memory usage. We prefer DFS scheduler if the peak memory is the same.
+  int64_t peak_memory_dfs;
+  TF_ASSIGN_OR_RETURN(
+      HloSchedule schedule_dfs,
+      ScheduleModule(&hlo_module,
+                     DFSMemoryScheduler(&alias_info, BufferSizeBytesFunction()),
+                     /*execution_threads=*/{}, &peak_memory_dfs));
+
+  int64_t peak_memory_list;
+  TF_ASSIGN_OR_RETURN(
+      HloSchedule schedule_list,
+      ScheduleModule(&hlo_module,
+                     ListMemoryScheduler(&alias_info, BufferSizeBytesFunction()),
+                     /*execution_threads=*/{}, &peak_memory_list));
+
+  if (peak_memory_list < peak_memory_dfs) {
+    VLOG(2) << "List scheduler peak memory " << peak_memory_list
+            << " is lower than DFS scheduler peak memory " << peak_memory_dfs;
+    return schedule_list;
+  }
+  VLOG(2) << "DFS scheduler peak memory " << peak_memory_dfs
+          << " is lower or equal to List scheduler peak memory "
+          << peak_memory_list;
+  return schedule_dfs;
 }
 
 absl::StatusOr<std::unique_ptr<BufferAssignment>>
